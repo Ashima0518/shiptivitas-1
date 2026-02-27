@@ -7,12 +7,11 @@ import './Board.css';
 export default class Board extends React.Component {
   constructor(props) {
     super(props);
-    const clients = this.getClients();
     this.state = {
       clients: {
-        backlog: clients.filter(client => !client.status || client.status === 'backlog'),
-        inProgress: clients.filter(client => client.status && client.status === 'in-progress'),
-        complete: clients.filter(client => client.status && client.status === 'complete'),
+        backlog: [],
+        inProgress: [],
+        complete: [],
       }
     }
     this.swimlanes = {
@@ -22,23 +21,103 @@ export default class Board extends React.Component {
     }
   }
 
-  componentDidMount() {
-    this.drake = Dragula([
-      this.swimlanes.backlog.current,
-      this.swimlanes.inProgress.current,
-      this.swimlanes.complete.current
-    ]);
+  async loadClientsFromApi() {
+  const res = await fetch('/api/v1/clients');
+  const all = await res.json();
 
-    this.drake.on('drop', () => {
+  const backlog = all
+    .filter(c => c.status === 'backlog')
+    .sort((a,b) => a.priority - b.priority);
+
+  const inProgress = all
+    .filter(c => c.status === 'in-progress')
+    .sort((a,b) => a.priority - b.priority);
+
+  const complete = all
+    .filter(c => c.status === 'complete')
+    .sort((a,b) => a.priority - b.priority);
+
+  this.setState({ clients: { backlog, inProgress, complete } });
+  }
+
+  componentDidMount() {
+  this.loadClientsFromApi();
+
+  // ensure refs are attached before initializing Dragula
+  setTimeout(() => {
+    const backlogEl = this.swimlanes.backlog.current;
+    const inProgressEl = this.swimlanes.inProgress.current;
+    const completeEl = this.swimlanes.complete.current;
+
+    if (!backlogEl || !inProgressEl || !completeEl) {
+      console.error('Swimlane refs are null. Check ref placement in Swimlane.js');
+      return;
+    }
+
+    this.drake = Dragula([backlogEl, inProgressEl, completeEl], {
+      moves(el, source, handle) {
+        // safer: allow dragging anywhere inside the card
+        if (!handle) return false;
+        if (handle.closest) return !!handle.closest('.Card');
+        // fallback (older browsers)
+        return handle.classList && handle.classList.contains('Card');
+      }
+    });
+
+    this.drake.on('drop', async () => {
+      console.log('Dragula containers:', this.drake.containers);
       const nextClients = this.syncStateWithDOM();
 
+      // keep React as source of truth
       this.drake.cancel(true);
 
-      this.setState({
-        clients: nextClients,
-      });
+      // update UI immediately
+      this.setState({ clients: nextClients });
+
+      // persist to backend
+      try {
+        await this.persistBoard(nextClients);
+        await this.loadClientsFromApi();
+      } catch (err) {
+        console.error('Failed to save board state', err);
+      }
     });
-  }
+  }, 0);
+}
+
+  buildUpdates(nextClients) {
+  const updates = [];
+
+  // backlog: priority 1..n
+  nextClients.backlog.forEach((c, idx) => {
+    updates.push({ id: c.id, status: 'backlog', priority: idx + 1 });
+  });
+  // in-progress: priority 1..n
+  nextClients.inProgress.forEach((c, idx) => {
+    updates.push({ id: c.id, status: 'in-progress', priority: idx + 1 });
+  });
+  // complete: priority 1..n
+  nextClients.complete.forEach((c, idx) => {
+    updates.push({ id: c.id, status: 'complete', priority: idx + 1 });
+  });
+
+  return updates;
+}
+
+async persistBoard(nextClients) {
+  const updates = this.buildUpdates(nextClients);
+
+  // simplest approach: update ALL cards after every drop
+  await Promise.all(
+    updates.map((u) =>
+      fetch(`/api/v1/clients/${u.id}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ status: u.status, priority: u.priority }),
+      })
+    )
+  );
+}
 
   componentWillUnmount() {
     if (this.drake) this.drake.destroy();
@@ -56,8 +135,10 @@ export default class Board extends React.Component {
       clientMap[c.id] = c;
     });
 
-    const getIdsFromLane = (laneRef) =>
-      Array.from(laneRef.current.children).map((el) => el.dataset.id);
+    const getIdsFromLane = (laneRef) => {
+      if (!laneRef.current) return [];
+      return Array.from(laneRef.current.children).map((el) => el.dataset.id);
+    };
 
     const backlogIds = getIdsFromLane(this.swimlanes.backlog);
     const inProgressIds = getIdsFromLane(this.swimlanes.inProgress);
@@ -81,35 +162,7 @@ export default class Board extends React.Component {
     return { backlog, inProgress, complete };
   }
 
-  getClients() {
-    return [
-      ['1','Stark, White and Abbott','Cloned Optimal Architecture'],
-      ['2','Wiza LLC','Exclusive Bandwidth-Monitored Implementation'],
-      ['3','Nolan LLC','Vision-Oriented 4Thgeneration Graphicaluserinterface'],
-      ['4','Thompson PLC','Streamlined Regional Knowledgeuser'],
-      ['5','Walker-Williamson','Team-Oriented 6Thgeneration Matrix'],
-      ['6','Boehm and Sons','Automated Systematic Paradigm'],
-      ['7','Runolfsson, Hegmann and Block','Integrated Transitional Strategy'],
-      ['8','Schumm-Labadie','Operative Heuristic Challenge'],
-      ['9','Kohler Group','Re-Contextualized Multi-Tasking Attitude'],
-      ['10','Romaguera Inc','Managed Foreground Toolset'],
-      ['11','Reilly-King','Future-Proofed Interactive Toolset'],
-      ['12','Emard, Champlin and Runolfsdottir','Devolved Needs-Based Capability'],
-      ['13','Fritsch, Cronin and Wolff','Open-Source 3Rdgeneration Website'],
-      ['14','Borer LLC','Profit-Focused Incremental Orchestration'],
-      ['15','Emmerich-Ankunding','User-Centric Stable Extranet'],
-      ['16','Willms-Abbott','Progressive Bandwidth-Monitored Access'],
-      ['17','Brekke PLC','Intuitive User-Facing Customerloyalty'],
-      ['18','Bins, Toy and Klocko','Integrated Assymetric Software'],
-      ['19','Hodkiewicz-Hayes','Programmable Systematic Securedline'],
-      ['20','Murphy, Lang and Ferry','Organized Explicit Access'],
-    ].map(companyDetails => ({
-      id: companyDetails[0],
-      name: companyDetails[1],
-      description: companyDetails[2],
-      status: 'backlog',
-    }));
-  }
+  
   renderSwimlane(name, clients, ref) {
     return (
       <Swimlane name={name} clients={clients} dragulaRef={ref}/>
